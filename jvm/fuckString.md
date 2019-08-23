@@ -146,7 +146,52 @@ class Test1{
 
 ```
 
-new 是创建一个字符串对象实例，对其进行默认初始化，并将指向该实例的一个引用压入操作数栈顶，dup指令复制该实例引用到操作数栈顶。接着执行到 ldc 指令，这时将 #3对应的 CONSTANT_String 类型推到栈顶，发现他还没有解析，于是进行解析，解析过程在堆中创建字符串 hello 的对象并将其存入字符串常量池中。接下来 invokespecial 执行对象构造函数，最后取出栈顶的引用储存到局部变量 s1 中。注意此时有两个 hello 对象，一个是执行 ldc 是创建的，它的引用驻留在字符串常量池中，一个是我们自己 new 的。
+new 是创建一个字符串对象实例，对其进行默认初始化，并将指向该实例的一个引用压入操作数栈顶，dup指令复制该实例引用到操作数栈顶。接着执行到 ldc 指令，这时将 #3对应的 CONSTANT_String 类型推到栈顶，发现他还没有解析，于是进行解析，解析过程中发现 StringTable 没有内容匹配的 java.lang.String 的引用，于是在堆中创建字符串 hello 的对象并将其存入字符串常量池中。接下来 invokespecial 执行对象构造函数，最后取出栈顶的引用储存到局部变量 s1 中。注意此时有两个 hello 对象，一个是执行 ldc 是创建的，它的引用驻留在字符串常量池中，一个是我们自己 new 的。
 
 接下来执行第二句，s1.intern() 会查找字符串常量池中是否有 hello 字符串的引用，因为在执行 ldc 的时候 JVM 已经将 hello 对象驻留在字符串常量池中，也就是字符串常量中已经有内容为 hello 的对象，所以直接返回该引用，而且并不会将 s1 的引用放入字符串常量池，所以结果为 false。
 
+[字节码更详细]([https://github.com/zpffly/notebook/blob/master/jvm/Java%E5%AD%97%E8%8A%82%E7%A0%81.md](https://github.com/zpffly/notebook/blob/master/jvm/Java字节码.md))
+
+例子2：
+
+```java
+class Test2{
+    static String s1 = "static"; //1
+    public static void main(String[] args) {
+        String s2 = new String("he") + new String("llo"); //2
+        s2.intern();   //3
+        String s3 = "hello";  //4
+        System.out.println(s3 == s2);//输出是true。
+    }
+}
+```
+
+对于代码中出现的字面量 "static"，"he"，"llo"，"hello" 都会进入 class文件常量池，但是由于类加载阶段中 resolve 阶段是 lazy 的，所以不会创建实例，也就没有驻留字符串常量池。但是，对于 "static" 来说是特殊的。因为 JVM 在类加载阶段中的初始化阶段就会为静态变量指定初始值，也就是将 static 赋值给 s1，所以这时会创建"static"字符串对象，并且会保存一个指向它的引用到字符串常量池。对应的字节码指令如下
+
+```java
+  static {};
+    descriptor: ()V
+    flags: (0x0008) ACC_STATIC
+    Code:
+      stack=1, locals=0, args_size=0
+         0: ldc           #11                 // String static
+         2: putstatic     #12                 // Field s1:Ljava/lang/String;
+         5: return
+      LineNumberTable:
+        line 2: 0
+}
+```
+
+注意 JVM 会静态变量初始化放到静态代码块中执行，而且是在类初始化时就会执行的。
+
+接下来执行 main() 方法。
+
+第二句： "he"，"llo" 进入字符串常量池过程同上个例子类似，对于两个字符串对象的相加，其内部是创建 StringBuilder 对象并且调用 append方法，最后调用StringBuilder对象的toString方法 new 出一个内容为hello的 String 对象，注意此时没有将这个对象的引用放入字符串常量池。
+
+对于 jdk9来说字符串相加进行了优化。[相关链接](https://juejin.im/post/5b4be51e51882519a62f5835)
+
+接下来第三句，因为字符串常量池中没有 hello 内容的字符串引用，所以 intern 方法将 hello 对象的引用保存到字符串常量池中。
+
+接下来第四句，因为字符串常量池中有 hello 内容的字符串，所以直接返回引用。
+
+所以第五句打印为 true。
