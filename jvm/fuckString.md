@@ -195,3 +195,6 @@ class Test2{
 接下来第四句，因为字符串常量池中有 hello 内容的字符串，所以直接返回引用。
 
 所以第五句打印为 true。
+
+整理自[Java 中new String("字面量") 中 "字面量" 是何时进入字符串常量池的? ](https://www.zhihu.com/question/55994121/answer/147296098)
+
