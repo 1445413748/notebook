@@ -345,5 +345,135 @@ public void registerBeanDefinitions(AnnotationMetadata metadata, BeanDefinitionR
 
 在 @EnableAutoConfiguration 还有 `@Import(AutoConfigurationImportSelector.class)`。
 
-**AutoConfigurationImportSelector**：导入哪些组件的选择器。
+**AutoConfigurationImportSelector**：导入哪些组件的选择器。在这个类的中
 
+```java
+@Override
+public String[] selectImports(AnnotationMetadata annotationMetadata) {
+	if (!isEnabled(annotationMetadata)) {
+		return NO_IMPORTS;
+	}
+	AutoConfigurationMetadata autoConfigurationMetadata = 		 AutoConfigurationMetadataLoader.loadMetadata(this.beanClassLoader);
+	AutoConfigurationEntry autoConfigurationEntry = 			getAutoConfigurationEntry(autoConfigurationMetadata,annotationMetadata);
+		return StringUtils.toStringArray(autoConfigurationEntry.getConfigurations());
+}
+```
+
+selectImports 的作用是收集要导入的配置类。
+
+selectImports 中 getAutoConfigurationEntry 方法：得到应该被导入的自动配置
+
+```java
+	/**
+	 * Return the {@link AutoConfigurationEntry} based on the {@link AnnotationMetadata}
+	 * of the importing {@link Configuration @Configuration} class.
+	 * @param autoConfigurationMetadata the auto-configuration metadata
+	 * @param annotationMetadata the annotation metadata of the configuration class
+	 * @return the auto-configurations that should be imported
+	 */List<String> configurations = getCandidateConfigurations(annotationMetadata, attributes);
+	protected AutoConfigurationEntry getAutoConfigurationEntry(AutoConfigurationMetadata autoConfigurationMetadata,
+			AnnotationMetadata annotationMetadata) {
+		if (!isEnabled(annotationMetadata)) {
+			return EMPTY_ENTRY;
+		}
+		AnnotationAttributes attributes = getAttributes(annotationMetadata);
+        // 获取所有通过META-INF/spring.factories配置的, 此时还不会进行过滤和筛选
+		// KEY为 ： org.springframework.boot.autoconfigure.EnableAutoConfiguration
+		List<String> configurations = getCandidateConfigurations(annotationMetadata, attributes);
+        //过滤，去重
+		configurations = removeDuplicates(configurations);
+		Set<String> exclusions = getExclusions(annotationMetadata, attributes);
+		checkExcludedClasses(configurations, exclusions);
+		configurations.removeAll(exclusions);
+		configurations = filter(configurations, autoConfigurationMetadata);
+		fireAutoConfigurationImportEvents(configurations, exclusions);
+		return new AutoConfigurationEntry(configurations, exclusions);
+	}
+```
+
+
+
+在 getCandidateConfigurations 方法中，通过指定类的
+
+```java
+List<String> configurations = SpringFactoriesLoader.loadFactoryNames(getSpringFactoriesLoaderFactoryClass(),      getBeanClassLoader());
+```
+
+获取获取候选的自动配置列表。
+
+这里的 getSpringFactoriesLoaderFactoryClass() 返回的是 EnableAutoConfiguration.class。
+
+```java
+protected Class<?> getSpringFactoriesLoaderFactoryClass() {
+    return EnableAutoConfiguration.class;}
+```
+
+loadFactoryNames() ：
+
+1. 扫描所有 jar 包类路径下的 META-INF/spring.factories
+2. 把扫描到的文件内容包装成 properties 对象。
+3. 从 properties 中获取到 EnableAutoConfiguration.class 对应的值，添加到容器中。
+
+```properties
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+org.springframework.boot.autoconfigure.admin.SpringApplicationAdminJmxAutoConfiguration,\
+org.springframework.boot.autoconfigure.aop.AopAutoConfiguration,\
+org.springframework.boot.autoconfigure.amqp.RabbitAutoConfiguration,\
+org.springframework.boot.autoconfigure.batch.BatchAutoConfiguration,
+```
+
+每一个类对应一个配置类
+
+以
+
+```java
+//表示为配置类
+@Configuration
+//判断当前容器中有没有这些类
+@ConditionalOnClass({ DataSource.class, EmbeddedDatabaseType.class })
+//启动指定类的 ConfigurationProperties 功能
+@EnableConfigurationProperties(DataSourceProperties.class)
+@Import({ DataSourcePoolMetadataProvidersConfiguration.class, DataSourceInitializationConfiguration.class })
+public class DataSourceAutoConfiguration {
+    //省略
+}
+```
+
+
+
+配置文件能配置的 spring.datasource 的属性参考这个类中的属性
+
+```java
+//从配置文件获取指定的值和 bean 属性进行绑定
+@ConfigurationProperties(prefix = "spring.datasource") //指定前缀名spring.datasource
+public class DataSourceProperties implements BeanClassLoaderAware, InitializingBean {
+}
+```
+
+比如 DataSourceProperties 中有下面的属性
+
+```Java
+	/**
+	 * JDBC URL of the database.
+	 */
+	private String url;
+
+	/**
+	 * Login username of the database.
+	 */
+	private String username;
+
+	/**
+	 * Login password of the database.
+	 */
+	private String password;
+
+```
+
+就可以在配置文件中配置
+
+> spring.datasource.username=zpffly
+
+
+
+**在 DataSourceAutoConfiguration() 会配置一些组件，而组件的来源则是我们在配置文件中配置的值。**
