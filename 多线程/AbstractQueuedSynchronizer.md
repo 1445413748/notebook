@@ -343,7 +343,7 @@ final boolean acquireQueued(final Node node, int arg) {
             // 非公平锁和公平锁的区别在于当队列中的第一个节点尝试获取锁的时候，刚好进来一个新的线程
             // 这个线程不需要判断是否队列中有等待的节点，可以直接竞争锁
             if (p == head && tryAcquire(arg)) {
-                //成功获得锁，将node设置为头结点
+                //成功获得锁，将node设置为头结点,
                 setHead(node);
                 // 断掉原来头节点和下个节点的连接 
                 p.next = null; // help GC
@@ -361,4 +361,210 @@ final boolean acquireQueued(final Node node, int arg) {
     }
 }
 ```
+
+当节点在 acquireQueued 获取锁失败，会通过下面的函数判断是否需要挂起
+
+```java
+// pred是前驱节点， node是当前节点
+private static boolean shouldParkAfterFailedAcquire(Node pred, Node node) {
+    int ws = pred.waitStatus;
+    if (ws == Node.SIGNAL)
+        /*
+         * This node has already set status asking a release
+         * to signal it, so it can safely park.
+         * 当前节点已经设置前驱节点为SIGNAL状态，当前驱节点释放锁的时候会唤醒
+         * 它的后继节点，也就是当前节点，所以当前节点可以阻塞自己。
+         */
+        return true;
+    if (ws > 0) {
+        /*
+         * Predecessor was cancelled. Skip over predecessors and
+         * indicate retry.
+         * ws>0 说明前驱节点取消了等待，所以向前遍历，找到第一个非取消的节点
+         * 之所以要向前遍历是因为当前节点要靠前驱节点来唤醒，如果前驱节点取消等待
+         * 那以后的节点也就不会被唤醒(acquire中得到锁的线程会被设置会head)
+         */
+        do {
+            node.prev = pred = pred.prev;
+        } while (pred.waitStatus > 0);
+        pred.next = node;
+    } else {
+        /*
+         * waitStatus must be 0 or PROPAGATE.  Indicate that we
+         * need a signal, but don't park yet.  Caller will need to
+         * retry to make sure it cannot acquire before parking.
+         * 来到这里说明等待状态为0或者PROPAGATE(-3)，此时会设置前驱节点的waitStatus
+         * 前驱节点的waitStatus就是在这里被设置的
+         */
+        pred.compareAndSetWaitStatus(ws, Node.SIGNAL);
+    }
+    // 如果来到这里返回false，节点node还不会被阻塞，此时会回到acquireQueued的for循环中继续执行
+    // 执行过程中可能获取锁成功，也有可能继续进入此函数直到从第一个分支返回true
+    return false;
+}
+```
+
+当 shouldParkAfterFailedAcquire 返回true，说明线程应该被阻塞。
+
+```java
+if (shouldParkAfterFailedAcquire(p, node))
+    interrupted |= parkAndCheckInterrupt();
+```
+所以会执行 parkAndCheckInterrupt
+
+```java
+private final boolean parkAndCheckInterrupt() {
+    //挂起线程，在此阻塞，等待被唤醒
+   LockSupport.park(this);
+   return Thread.interrupted();
+}
+```
+
+如果线程取消了等待，则acquireQueued中会抛出异常并捕获，执行 cancelAcquire
+
+```java
+private void cancelAcquire(Node node) {
+    // Ignore if node doesn't exist
+    if (node == null)
+        return;
+
+    node.thread = null;
+
+    // Skip cancelled predecessors
+    // 将node前驱指向前面最近一个非取消节点pred
+    Node pred = node.prev;
+    while (pred.waitStatus > 0)
+        node.prev = pred = pred.prev;
+
+    // predNext is the apparent node to unsplice. CASes below will
+    // fail if not, in which case, we lost race vs another cancel
+    // or signal, so no further action is necessary, although with
+    // a possibility that a cancelled node may transiently remain
+    // reachable.
+    // 记录pred的后继节点为predNext
+    Node predNext = pred.next;
+
+    // Can use unconditional write instead of CAS here.
+    // After this atomic step, other Nodes can skip past us.
+    // Before, we are free of interference from other threads.
+    // 将node状态设置为取消，就算后继节点在cancel也可以跳过
+    node.waitStatus = Node.CANCELLED;
+
+    // If we are the tail, remove ourselves.
+    // 如果node是尾节点，直接将pred设置为尾节点，pred后面的将会被gc
+    if (node == tail && compareAndSetTail(node, pred)) {
+        // 这里更新失败也没有关系，说明有其他线程入队或者其他取消线程更新掉了
+        pred.compareAndSetNext(predNext, null);
+    } else { // 如果node有后继节点
+        // If successor needs signal, try to set pred's next-link
+        // so it will get one. Otherwise wake it up to propagate.
+        // 如果node还有后继节点，这种情况要做的事情是把pred和后继非取消节点拼起来。
+        int ws;
+        if (pred != head &&
+            ((ws = pred.waitStatus) == Node.SIGNAL ||
+             (ws <= 0 && pred.compareAndSetWaitStatus(ws, Node.SIGNAL))) &&
+            pred.thread != null) {
+            Node next = node.next;
+            // 如果node的后继节点不是取消状态，则用CAS尝试将pred的后继置为node的后继
+            if (next != null && next.waitStatus <= 0)
+                pred.compareAndSetNext(predNext, next);
+        } else {
+           /*
+            * 这时说明pred == head或者pred状态取消或者pred.thread == null
+            * 在这些情况下为了保证队列的活跃性，需要去唤醒一次后继线程。
+            * 举例来说pred == head完全有可能实际上目前已经没有线程持有锁了，
+            * 自然就不会有释放锁唤醒后继的动作。如果不唤醒后继，队列就挂掉了。
+            * 
+            * 这种情况下看似由于没有更新pred的next的操作，队列中可能会留有一大把的取消节点。
+            * 实际上不要紧，因为后继线程唤醒之后会走一次试获取锁的过程，
+            * 失败的话会走到shouldParkAfterFailedAcquire的逻辑。
+            * 那里面的if中有处理前驱节点如果为取消则维护pred/next,踢掉这些取消节点的逻辑。
+            */            
+            unparkSuccessor(node);
+        }
+
+        node.next = node; // help GC
+    }
+}
+```
+
+
+
+
+
+### 解锁
+
+```java
+public void unlock() {
+    sync.release(1);
+}
+// AQS 实现
+public final boolean release(int arg) {
+    // 尝试释放锁
+    if (tryRelease(arg)) {
+        Node h = head;
+        if (h != null && h.waitStatus != 0)
+            unparkSuccessor(h);
+        return true;
+    }
+    return false;
+}
+```
+
+```java
+protected final boolean tryRelease(int releases) {  //releases==1
+    int c = getState() - releases;
+    if (Thread.currentThread() != getExclusiveOwnerThread())
+        throw new IllegalMonitorStateException();
+    boolean free = false;
+    // 如果 c==0，说明没有嵌套锁，可以释放，否则不能将锁释放
+    if (c == 0) {
+        free = true;
+        setExclusiveOwnerThread(null);
+    }
+    setState(c);
+    return free;
+}
+```
+
+如果 tryRelease 返回 true，说明锁已经被释放，可以唤醒阻塞队列中的节点
+
+```java
+private void unparkSuccessor(Node node) { //node 为头结点
+    /*
+     * If status is negative (i.e., possibly needing signal) try
+     * to clear in anticipation of signalling.  It is OK if this
+     * fails or if status is changed by waiting thread.
+     */
+    int ws = node.waitStatus;
+    if (ws < 0)
+        node.compareAndSetWaitStatus(ws, 0);
+
+    /*
+     * Thread to unpark is held in successor, which is normally
+     * just the next node.  But if cancelled or apparently null,
+     * traverse backwards from tail to find the actual
+     * non-cancelled successor.
+     */
+    Node s = node.next;
+    // 如果头结点后继节点为null或者已经取消等待，从阻塞队列后面向前查找
+    if (s == null || s.waitStatus > 0) {
+        s = null;
+        for (Node p = tail; p != node && p != null; p = p.prev)
+            if (p.waitStatus <= 0)
+                s = p;
+    }
+    if (s != null)
+        LockSupport.unpark(s.thread); //唤醒
+}
+```
+
+这里唤醒节点为什么要从后向前遍历？
+
+当 `s == null` 时并不能说明 node 为 tail，主要的原因在 addWaiter 中。
+
+1. 假设某时刻 node 为 tail
+2. 假设有新的线程通过 addWaiter 添加自己
+3. 新线程 compareAndSetTail 成功
+4. 此时 Node s = node.next 得到的 s 为 null，可是此时 node 并不是 tail。
 
