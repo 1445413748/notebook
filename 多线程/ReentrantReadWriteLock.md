@@ -533,3 +533,47 @@ protected final boolean tryAcquire(int acquires) {
     }
 ```
 
+#### 利用 ReadWriteLock 实现缓存
+
+```java
+class Chche<K, V>{
+    final Map<K, V> map = new HashMap<>();
+    final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    // 写锁
+    final WriteLock wl = lock.writeLock();
+    //读锁
+    final ReadLock rl = lock.readLock();
+    
+    // 获取缓存
+    V get(K key){
+        V value = null;
+        rl.lock();
+        try{
+            value = map.get(key);
+        }finally{
+            rl.unlock();
+        }
+        if (value != null)
+            return value;
+        // 如果查询不到缓存，到数据源查询
+        wl.lock();
+        try{
+            // 再次查询
+            value = map.get(key);
+            if (value == null){
+                // 查询数据
+                // ...
+                // 赋值给 value
+                // v = ...;
+                // 添加到缓存
+                map.put(key, value);
+            }
+        }finally{
+                wl.unlock();
+            }
+        return value;
+    }
+}
+```
+
+之所以要再次查询，是因为可能多个线程同时检测到 value == null，准备从数据源查询，可是只有一个线程能得到写锁，查询完数据就将其放在缓存，这样其他线程进来后检测到已经存在该值就不用再到数据源查询了。

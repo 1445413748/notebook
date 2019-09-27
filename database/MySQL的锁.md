@@ -16,6 +16,15 @@ lock 的种类
 
 ![](img/Locks.png)
 
+如何查看锁
+
+```mysql
+select * from information_schema.innodb_locks; #锁的概况
+show engine innodb status; #InnoDB整体状态，其中包括锁的情况
+```
+
+
+
 ## 锁的分类
 
 ### 一、全局锁
