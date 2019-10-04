@@ -245,7 +245,7 @@ static final class NonfairSync extends Sync {
 }
 ```
 
-下面以非公平锁为例。
+下面以公平锁为例。
 
 在调用了 lock 后，通过 Sync 类调用了 acquire 方法（父类实现）
 
@@ -565,6 +565,5 @@ private void unparkSuccessor(Node node) { //node 为头结点
 
 1. 假设某时刻 node 为 tail
 2. 假设有新的线程通过 addWaiter 添加自己
-3. 新线程 compareAndSetTail 成功
-4. 此时 Node s = node.next 得到的 s 为 null，可是此时 node 并不是 tail。
-
+3. 新线程 compareAndSetTail 成功，可是还没有将 oldTail 的 next 指向 新线程
+4. 此时 Node s = node.next 得到的 s 为 null，可是此时 node 并不是 tail
