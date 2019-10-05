@@ -1,3 +1,421 @@
+### AQS 共享锁
+
+下面用 Semaphore 为例
+
+#### 加锁过程
+
+```java
+/* Semaphore.acquire */
+// 获取信号量，也就是加锁
+public void acquire() throws InterruptedException {
+    sync.acquireSharedInterruptibly(1);
+}
+
+
+/* AQS.acquireSharedInterruptibly, 类似有acquireShared，只是没有中断检测*/
+public final void acquireSharedInterruptibly(int arg)
+    throws InterruptedException {
+    if (Thread.interrupted())
+        throw new InterruptedException();
+	// 尝试获取共享锁    
+    if (tryAcquireShared(arg) < 0)
+        // 如果 tryAcquireShared 返回负数，则尝试获取锁失败，开始不断获取锁或阻塞唤醒后继续尝试获取
+        doAcquireSharedInterruptibly(arg);
+}
+
+
+/* Semaphore.tryAcquireShared， 这里以公平锁为例*/
+// 尝试获取共享锁
+protected int tryAcquireShared(int acquires) {
+    for (;;) {
+        // 如果队列中还有阻塞的队列，则获取共享锁失败
+        // 非公平锁的区别就是没有这个检测
+        if (hasQueuedPredecessors())
+            return -1;
+        // 下面是获取 state 并更新
+        int available = getState();
+        int remaining = available - acquires;
+        if (remaining < 0 ||
+            compareAndSetState(available, remaining))
+            // 在 Semaphore 中是当 state 大于0时可以获取锁，否则会被阻塞
+            // 所以 remaining 大于等于0 说明线程获取锁成功，小于0 说明获取锁失败
+            return remaining;
+    }
+}
+
+
+/* AQS.doAcquireSharedInterruptibly, 和doAcquireShared类似*/
+// 如果尝试获取共享锁失败，也就是tryAcquireShared(arg) < 0进入这个方法
+// 在这个方法中一直尝试获取共享锁
+private void doAcquireSharedInterruptibly(int arg)
+    throws InterruptedException {
+    // 将当前线程包装成 Node 节点并加入队列
+    final Node node = addWaiter(Node.SHARED);
+    try {
+        for (;;) {
+            // 得到当前线程节点的前驱节点
+            final Node p = node.predecessor();
+            // 如果前驱节点是阻塞队列的头结点就继续尝试获取共享锁
+            if (p == head) {
+                int r = tryAcquireShared(arg);
+                // r>=0 说明了获取共享锁成功
+                if (r >= 0) {
+                    setHeadAndPropagate(node, r);
+                    // 回收旧的头结点，看 setHeadAndPropagate 的图
+                    p.next = null; // help GC
+                    return;
+                }
+            }
+            // 来到这里说明要不就是 node 前驱节点不是 head，要不就是获取共享锁失败
+            // 于是尝试将线程阻塞，注意唤醒后也是从这里继续执行
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                throw new InterruptedException();
+        }
+    } catch (Throwable t) {
+        cancelAcquire(node);
+        throw t;
+    }
+}
+
+
+/* AQS.setHeadAndPropagate */
+// 如果 doAcquireSharedInterruptibly 中获取锁成功，则会进入这个方法
+// 这个方法主要就是更新阻塞队列的头结点，如果当前节点有后继节点，唤醒后继节点
+private void setHeadAndPropagate(Node node, int propagate) {
+    //setHeadAndPropagate(node, r); r == propagate >= 0
+    // 保存原先节点
+    Node h = head;
+    
+    /* 设置头结点之前
+         +------+         +-----+         +-----+
+    Head |      | <---->  |node | <---->  |     |  tail
+         +------+         +-----+         +-----+
+    */
+    
+    // 设置 node 为新头结点
+    setHead(node);
+    
+    /*
+     设置新头节点之后
+            +------+    head +-----+         +-----+
+    oldHead |      |  ---->  |node | <---->  |     |  tail
+            +------+         +-----+         +-----+
+    */
+    
+    // propagate > 0 ，也就是 r > 0，说明了还是有剩下的共享锁可以被获取，所以执行唤醒操作
+    // 那这里为什么还有这么多其他的判断条件
+    if (propagate > 0 || h == null || h.waitStatus < 0 ||
+        (h = head) == null || h.waitStatus < 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+}
+
+
+
+/* AQS.doReleaseShared */
+// 唤醒线程或者设置传播状态
+private void doReleaseShared() {
+    for (;;) {
+        Node h = head;
+        // 如果阻塞队列有后继节点，执行唤醒
+        if (h != null && h != tail) {
+            // 得到头结点的状态
+            int ws = h.waitStatus;
+            if (ws == Node.SIGNAL) {
+                // 成功将头结点的状态设置为0，才唤醒线程
+                if (!h.compareAndSetWaitStatus(Node.SIGNAL, 0))
+                    continue;            // loop to recheck cases
+                unparkSuccessor(h);
+            }
+            // 如果头结点状态为0，则将头结点状态设置为传播状态
+            // 在setHeadAndPropagate中调用了doReleaseShared方法，说明
+            // 还有线程需要被唤醒，如果不设置传播状态，因为 ws == 0，该线程
+            // 将一直阻塞，队列死亡。
+            else if (ws == 0 &&
+                     // Node.PROPAGATE = -3
+                     !h.compareAndSetWaitStatus(0, Node.PROPAGATE)) 
+                continue;                // loop on failed CAS
+        }
+        if (h == head)                   // loop if head changed
+            break;
+    }
+}
+
+```
+
+
+
+
+
+#### 解锁过程
+
+```Java
+/* Semaphore.release */
+public void release(int permits) {
+    if (permits < 0) throw new IllegalArgumentException();
+    sync.releaseShared(permits);
+}
+
+
+/* AQS.releaseShared */
+public final boolean releaseShared(int arg) {
+    // 先尝试释放共享锁
+    if (tryReleaseShared(arg)) {
+        // 如果尝试释放共享锁失败，则一直尝试释放
+        doReleaseShared();
+        return true;
+    }
+    return false;
+}
+
+
+/* Semaphore.tryReleaseShared */
+// 尝试释放锁
+protected final boolean tryReleaseShared(int releases) {
+    for (;;) {
+        int current = getState();
+        int next = current + releases;
+        if (next < current) // overflow
+            throw new Error("Maximum permit count exceeded");
+        if (compareAndSetState(current, next))
+            return true;
+    }
+}
+```
+
+
+
+---
+
+**setHeadAndPropagate 中为什么有还有这么多其他判断?**
+
+**Node 节点中的 Propagate 状态存在的意义是什么？**
+
+```java
+private void setHeadAndPropagate(Node node, int propagate) {
+    //setHeadAndPropagate(node, r); r == propagate >= 0
+    // 保存原先节点
+    Node h = head;
+    
+    /* 设置头结点之前
+         +------+         +-----+         +-----+
+    Head |      | <---->  |node | <---->  |     |  tail
+         +------+         +-----+         +-----+
+    */
+    
+    // 设置 node 为新头结点
+    setHead(node);
+    
+    /*
+     设置新头节点之后
+            +------+    head +-----+         +-----+
+    oldHead |      |  ---->  |node | <---->  |     |  tail
+            +------+         +-----+         +-----+
+    */
+    
+    // propagate > 0 ，也就是 r > 0，说明了还是有剩下的共享锁可以被获取，所以执行唤醒操作
+    // 那这里为什么还有这么多其他的判断条件
+    if (propagate > 0 || h == null || h.waitStatus < 0 ||
+        (h = head) == null || h.waitStatus < 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+}
+```
+
+我们怎么调用上面这个方法的？
+
+```java
+            if (p == head) {
+                int r = tryAcquireShared(arg);
+                // r>=0 说明了获取共享锁成功
+                if (r >= 0) {
+                    setHeadAndPropagate(node, r);
+                    // 回收旧的头结点，看 setHeadAndPropagate 的图
+                    p.next = null; // help GC
+                    return;
+                }
+            }
+```
+
+r >= 0 说明头结点后面的第一个节点成功获取锁，**并且如果 r > 0 则说明了还有剩余的共享锁可以获取， r == 0 说明刚好使用完所有的共享锁。**
+
+接着调用 setHeadAndPropagate(node, r)
+
+按道理来说，只要 propagate（也就是传进来的r）大于0（有剩余共享锁），我才去唤醒其他阻塞的线程，那我 setHeadAndPropagate 不是可以做下面的修改
+
+```java
+    if (propagate > 0 || h == null || h.waitStatus < 0 ||
+        (h = head) == null || h.waitStatus < 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+
+//  ---->
+
+    if (propagate > 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+```
+
+但是这样写是存在 bug 的，可能会导致线程 hang 住
+
+如下面的程序
+
+```java
+import java.util.concurrent.Semaphore;
+
+public class TestSemaphore {
+
+   private static Semaphore sem = new Semaphore(0);
+
+   private static class Thread1 extends Thread {
+       @Override
+       public void run() {
+           sem.acquireUninterruptibly();
+       }
+   }
+
+   private static class Thread2 extends Thread {
+       @Override
+       public void run() {
+           sem.release();
+       }
+   }
+
+   public static void main(String[] args) throws InterruptedException {
+       for (int i = 0; i < 10000000; i++) {
+           Thread t1 = new Thread1();
+           Thread t2 = new Thread1();
+           Thread t3 = new Thread2();
+           Thread t4 = new Thread2();
+           t1.start();
+           t2.start();
+           t3.start();
+           t4.start();
+           t1.join();
+           t2.join();
+           t3.join();
+           t4.join();
+           System.out.println(i);
+       }
+   }
+}
+```
+
+[可在这找到](http://bugs.java.com/view_bug.do?bug_id=6801020)
+
+对于上面的程序，t1, t2 用户获取信号量， t3, t4 用于释放信号量，信号量初始化为0。
+
+假设某个循环中，t1, t2 启动后获取不到信号量被阻塞，如下：
+
+```
+                            t1              t2
+         +------+         +-----+         +-----+
+    head |      | <---->  |     | <---->  |     |  tail
+         +------+         +-----+         +-----+
+         
+```
+
+接下来执行 `t3.join()` ，执行 `releaseShared`  -> `tryReleaseShared` -> `doReleaseShared`。在 `doReleaseShared` 中会唤醒线程 t1，t1 被唤醒前，会将 head 节点的 waitStatus 设置为 0，接着 t1 从 `doAcquireSharedInterruptibly` 中继续执行，也就是走下面的循环
+
+```java
+        for (;;) {
+            // 得到当前线程节点的前驱节点
+            final Node p = node.predecessor();
+            // 如果前驱节点是阻塞队列的头结点就继续尝试获取共享锁
+            if (p == head) {
+                int r = tryAcquireShared(arg);
+                // r>=0 说明了获取共享锁成功
+                if (r >= 0) {
+                    setHeadAndPropagate(node, r);
+                    // 回收旧的头结点，看 setHeadAndPropagate 的图
+                    p.next = null; // help GC
+                    return;
+                }
+            }
+            // 来到这里说明要不就是 node 前驱节点不是 head，要不就是获取共享锁失败
+            // 于是尝试将线程阻塞，注意唤醒后也是从这里继续执行
+            if (shouldParkAfterFailedAcquire(p, node) &&
+                parkAndCheckInterrupt())
+                throw new InterruptedException();
+        }
+```
+
+时刻一：假设此时 t1 刚执行完 `tryAcquireShared(arg)`，（这是会成功的，**且返回值为0**）就停在这里了，**注意此时 head 节点的 waitStatus 已经被设置为 0**。
+
+
+
+时刻二：假设 t4 也释放锁，执行 `releaseShared` -> `tryReleaseShared` ->  `doReleaseShared` ，在 `doReleaseShared` 中因为 head.waitStatus 是 0 （这里的 head 跟 t1 读到的 head 一样，因为此时 t1 还没有设置自己为头结点），所以不会执行 `unparkSuccessor(h)`
+
+
+
+时刻三：接下来 t1 继续执行会进入 `setHeadAndPropagate`，注意 `r == 0`，假设在 `setHeadAndPropagate` 中我们仅仅依赖 `propagate > 0` 来判断是否需要唤醒，那么 t1 并不会执行唤醒操作。
+
+```java
+    if (propagate > 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+```
+
+所以，最后线程 t2 根本不会有人去唤醒它。
+
+
+
+**那 Node 中 Propagate 状态如何解决这个问题？**
+
+主要在时刻二中，当 t4 读到 head.waitStatus 是 0 后，它会设置 head 的 waitStatus 为 PROPAGATE。因此，到了时刻三中，t1 在 `setHeadAndPropagate` 中可以得到 h.waitStatus < 0，因此执行唤醒操作唤醒 t2。
+
+```java
+private void setHeadAndPropagate(Node node, int propagate) {
+    //setHeadAndPropagate(node, r); r == propagate >= 0
+    Node h = head;
+    // 设置 node 为新头结点
+    setHead(node);
+    if (propagate > 0 || h == null || h.waitStatus < 0 ||
+        (h = head) == null || h.waitStatus < 0) {
+        Node s = node.next;
+        // s 为空或者 s 是获取的是共享锁
+        if (s == null || s.isShared())
+            // 唤醒操作
+            doReleaseShared();
+    }
+}
+```
+
+
+
+也就是说，上面会产生线程 hang 住 bug 的case在引入 PROPAGATE 后可以被规避掉。在PROPAGATE引入之前，之所以可能会出现线程hang住的情况，就是在于 releaseShared 有竞争的情况下，可能会有队列中处于等待状态的节点因为第一个线程完成释放唤醒，第二个线程获取到锁，但还没设置好head，又有新线程释放锁，但是读到老的 head 状态为0导致释放但不唤醒，最终后一个等待线程既没有被释放线程唤醒，也没有被持锁线程唤醒
+
+
+
+
+
+---
+
+
+
+
+
 ## CountDownLatch
 
 countDownLatch 是一个同步工具类，它允许一个或多个线程等待直到其他线程执行完再执行。
@@ -338,6 +756,16 @@ private void doReleaseShared() {
 
 
 
+
+
+
+
+
+Reference：
+
+[AbstractQueuedSynchronizer源码解读](https://www.cnblogs.com/micrari/p/6937995.html)
+
+[一行一行源码分析清楚 AbstractQueuedSynchronizer](https://javadoop.com/post/AbstractQueuedSynchronizer-3)
 
 
 
