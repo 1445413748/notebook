@@ -761,11 +761,13 @@ Integer.numberOfLeadingZeros(n)，是返回二进制表示中，前面有多少�
 
 ```java
 private final void tryPresize(int size) {
+    // c 为size的1.5倍加1，然后向上取最近的二次幂的数
     int c = (size >= (MAXIMUM_CAPACITY >>> 1)) ? MAXIMUM_CAPACITY :
         tableSizeFor(size + (size >>> 1) + 1);
     int sc;
     while ((sc = sizeCtl) >= 0) {
         Node<K,V>[] tab = table; int n;
+        // 这里跟初始化数组基本一样
         if (tab == null || (n = tab.length) == 0) {
             n = (sc > c) ? sc : c;
             if (U.compareAndSetInt(this, SIZECTL, sc, -1)) {
@@ -781,10 +783,14 @@ private final void tryPresize(int size) {
                 }
             }
         }
+        
+        // c <= sc说明已经被扩容
         else if (c <= sc || n >= MAXIMUM_CAPACITY)
             break;
         else if (tab == table) {
+            // 计算本次扩容的生成戳
             int rs = resizeStamp(n);
+            // 试着让自己成为第一个执行transfer任务的线程
             if (U.compareAndSetInt(this, SIZECTL, sc,
                                     (rs << RESIZE_STAMP_SHIFT) + 2))
                 transfer(tab, null);
@@ -856,7 +862,7 @@ private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
             }
         } //while结束
         
-        
+        // 这里为退出出口
         // i<0说明这次transfer完成
         // i>=n说明扩容轮次跟预想的不一样
         if (i < 0 || i >= n || i + n >= nextn) {
@@ -869,23 +875,34 @@ private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
                 sizeCtl = (n << 1) - (n >>> 1);
                 return;
             }
+            // 将扩容的线程减一，表示自己要退出扩容
             if (U.compareAndSetInt(this, SIZECTL, sc = sizeCtl, sc - 1)) {
+                
+                // sizeCtl 在迁移前会设置为 (resizeStamp(n) << RESIZE_STAMP_SHIFT) + 2
+                // 判断自己是不是本轮扩容的最后一个线程
                 if ((sc - 2) != resizeStamp(n) << RESIZE_STAMP_SHIFT)
                     return;
+                // 最后一个扩容的线程要重新检查一次旧数组的所有hash桶，看是否是都被正确迁移到新数组了。
+                
                 finishing = advance = true;
                 i = n; // recheck before commit
             }
         }
         
+        // hash桶为null，说明不用迁移
         else if ((f = tabAt(tab, i)) == null)
             advance = casTabAt(tab, i, null, fwd);
+        
+         // 该位置处是一个 ForwardingNode，代表该位置已经迁移过了
         else if ((fh = f.hash) == MOVED)
             advance = true; // already processed
         else {
             synchronized (f) {
                 if (tabAt(tab, i) == f) {
                     Node<K,V> ln, hn;
+                    // 头结点的 hash 大于 0，说明是链表的 Node 节点
                     if (fh >= 0) {
+                        // 和hashmap一样，确定扩容位置
                         int runBit = fh & n;
                         Node<K,V> lastRun = f;
                         for (Node<K,V> p = f.next; p != null; p = p.next) {
@@ -899,7 +916,7 @@ private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
                             ln = lastRun;
                             hn = null;
                         }
-                        else {
+                        else { //runBit==1
                             hn = lastRun;
                             ln = null;
                         }
@@ -910,11 +927,16 @@ private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
                             else
                                 hn = new Node<K,V>(ph, pk, pv, hn);
                         }
+                        // 其中的一个链表放在新数组的位置 i
                         setTabAt(nextTab, i, ln);
+                        // 另一个链表放在新数组的位置 i+n
                         setTabAt(nextTab, i + n, hn);
+                        // 放置标记节点，告诉其他线程这个桶已经迁移完成
                         setTabAt(tab, i, fwd);
+                        // advance 设置为 true，代表该位置已经迁移完毕
                         advance = true;
                     }
+                    // 红黑树迁移
                     else if (f instanceof TreeBin) {
                         TreeBin<K,V> t = (TreeBin<K,V>)f;
                         TreeNode<K,V> lo = null, loTail = null;
@@ -956,5 +978,33 @@ private final void transfer(Node<K,V>[] tab, Node<K,V>[] nextTab) {
     }
 }
 
+```
+
+#### 获取元素get
+
+```java
+public V get(Object key) {
+    Node<K,V>[] tab; Node<K,V> e, p; int n, eh; K ek;
+    int h = spread(key.hashCode());
+    if ((tab = table) != null && (n = tab.length) > 0 &&
+        (e = tabAt(tab, (n - 1) & h)) != null) {
+        if ((eh = e.hash) == h) {
+            if ((ek = e.key) == key || (ek != null && key.equals(ek)))
+                return e.val;
+        }
+        // 如果头结点的 hash 小于 0，说明 正在扩容，或者该位置是红黑树
+        else if (eh < 0)
+            // 调用对应的find函数
+            // 如果是扩容，会转到 newTab 中查找
+            return (p = e.find(h, key)) != null ? p.val : null;
+        // 遍历链表
+        while ((e = e.next) != null) {
+            if (e.hash == h &&
+                ((ek = e.key) == key || (ek != null && key.equals(ek))))
+                return e.val;
+        }
+    }
+    return null;
+}
 ```
 
