@@ -279,7 +279,7 @@ private Entry getEntryAfterMiss(ThreadLocal<?> key, int i, Entry e) {
         // 查找到key，返回
         if (k == key)
             return e;
-        // 查找到脏key，清除
+        // 查找到脏key，清除对应的Entry
         if (k == null)
             expungeStaleEntry(i);
         // 继续向后查找
