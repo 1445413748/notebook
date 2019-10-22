@@ -306,6 +306,25 @@ private int awaitDone(boolean timed, long nanos)
 
 **从上面可以知道，线程调用 get 方法但没有立即返回不一定是被阻塞，有可能是任务处于 COMPLETING 状态，线程让出了执行权而已。**
 
+#### 获取结果 report
+
+```java
+private V report(int s) throws ExecutionException {
+    // 如果任务是正常执行完，outcome 保存的是返回结果
+    // 如果任务抛出异常，outcome 保存的是对应的 exception
+    Object x = outcome;
+    // 正常执行完
+    if (s == NORMAL)
+        return (V)x;
+    if (s >= CANCELLED)
+        throw new CancellationException();
+    // 任务执行异常，抛出异常
+    throw new ExecutionException((Throwable)x);
+}
+```
+
+
+
 #### 取消任务 cancel
 
 ```java
