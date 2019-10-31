@@ -167,6 +167,7 @@ public void run() {
         return;
     try {
         Callable<V> c = callable;
+        // double check
         if (c != null && state == NEW) {
             V result;
             boolean ran;
