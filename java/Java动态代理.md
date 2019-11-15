@@ -657,6 +657,301 @@ public boolean equals(Object obj) {
 
 
 
+## cglib
+
+CGLIB是一个功能强大，高性能的代码生成包。它为没有实现接口的类提供代理，为JDK的动态代理提供了很好的补充。
+
+cglib 主要通过操纵字节码处理框架 ASM，动态生成要代理类的子类。在子类中，动态织入添加的逻辑，然后再调用父类的方法。
+
+### 使用
+
+使用前导入 `cglib` 和 `asm` 。
+
+#### 定义目标类
+
+```Java
+public class Hello {
+    public void sayHello(){
+        System.out.println("hello");
+    }
+
+    public void sayBye(){
+        System.out.println("bye");
+    }
+}
+```
+
+#### 定义方法拦截器
+
+```Java
+public class HelloInterceptor implements MethodInterceptor {
+
+    /**
+     *
+     * @param o 代理对象
+     * @param method 目标方法
+     * @param objects 目标方法参数
+     * @param methodProxy 也代表着当前方法的引用，基于 FastClass 机制
+     * @return 目标方法执行结果
+     * @throws Throwable
+     */
+    @Override
+    public Object intercept(Object o, Method method, Object[] objects, MethodProxy methodProxy) throws Throwable {
+        System.out.println("before method");
+        Object res = methodProxy.invokeSuper(o, objects);
+        System.out.println("after method");
+        return res;
+    }
+}
+```
+
+定义方法过滤器，这里函数的返回值是我们在后面定义的 `Callback` 数组的索引值，对应着不同的处理策略
+
+```Java
+public class HelloFilter implements CallbackFilter {
+    @Override
+    public int accept(Method method) {
+        // 拦截sayBye方法
+        if (method.getName().equals("sayBye")){
+            return 1;
+        }
+        return 0;
+    }
+}
+```
+
+#### 客户端调用
+
+```java
+public class Main {
+    public static void main(String[] args) {
+        Enhancer enhancer = new Enhancer();
+        // 设置目标类
+        enhancer.setSuperclass(Hello.class);
+        // 这里是为过滤器定义数组，每个索引对应不同的返回值
+        // 每个索引值的拦截器去负责拦截过滤器返回相同数字的函数
+        // NoOp.INSTANCE 代表空操作
+        Callback[] callbacks = new Callback[]{new HelloInterceptor(), NoOp.INSTANCE};
+        enhancer.setCallbacks(callbacks);
+        enhancer.setCallbackFilter(new HelloFilter());
+        Hello proxy = (Hello) enhancer.create();
+        proxy.sayHello();
+        proxy.sayBye();
+    }
+}
+```
+
+#### 结果：
+
+```
+before method
+hello
+after method
+bye
+```
+
+
+
+### 方法执行
+
+```java
+// 将生成的类保存在当前路径
+System.setProperty(DebuggingClassWriter.DEBUG_LOCATION_PROPERTY, ".");
+```
+
+以 sayHello 为例，生成的代码：
+
+```Java
+final void CGLIB$sayHello$0() {
+    super.sayHello();
+}
+
+public final void sayHello() {
+    MethodInterceptor var10000 = this.CGLIB$CALLBACK_0;
+    // 找到我们为这个方法设定的拦截器
+    if (var10000 == null) {
+        CGLIB$BIND_CALLBACKS(this);
+        // 这里得到的是HelloInterceptor
+        var10000 = this.CGLIB$CALLBACK_0;
+    }
+
+    // 如果这个方法存在设定的拦截器则调用我们重写的intercept
+    if (var10000 != null) {
+        var10000.intercept(this, CGLIB$sayHello$0$Method, CGLIB$emptyArgs, CGLIB$sayHello$0$Proxy);
+    } else { // 否则直接调用父类方法
+        super.sayHello();
+    }
+}
+```
+
+这里生成的其实有两个关于 `sayHello` 的方法，一个是继承自父类的直接重写，一个是对父类方法的直接调用。
+
+如果 var10000 不为空说明该方法存在对应的拦截器，则调用该拦截器的 intercept，对应的参数在代理类静态代码块中进行了初始化
+
+```Java
+CGLIB$emptyArgs = new Object[0];
+
+CGLIB$sayHello$0$Method = ReflectUtils.findMethods(new String[]{"sayHello", "()V"}, (var1 = Class.forName("cglibProxy.Hello")).getDeclaredMethods())[0];
+
+CGLIB$sayHello$0$Proxy = MethodProxy.create(var1, var0, "()V", "sayHello", "CGLIB$sayHello$0");
+```
+
+在 `Intercept` 方法中我们是通过 `methodProxy` 来进行调用父类函数的
+
+```java
+methodProxy.invokeSuper(o, objects);
+```
+
+
+
+**那 `methodProxy` 是什么东西？**
+
+我们知道，Method 是通过反射来调用方法的，这种调用方法的方式肯定会比直接调用比较慢，因此，`MethodProxy` 会将目标类方法与索引一一对应，通过索引来调用方法，借此提升性能。
+
+通过上面的静态代码块，我们可以知道 `methodProxy` 是通过静态方法 `create` 生成的，`create` 方法如下：
+
+```Java
+public static MethodProxy create(Class c1, Class c2, String desc, String name1, String name2) {
+    MethodProxy proxy = new MethodProxy();
+    // Signature相当于存储 name1, desc 的容器而已
+    proxy.sig1 = new Signature(name1, desc);
+    proxy.sig2 = new Signature(name2, desc);
+    proxy.createInfo = new CreateInfo(c1, c2);
+    return proxy;
+}
+```
+
+参数含义：
+
++ c1：我们的委托类，即被代理类
++ c2：代理类
++ desc：方法描述符
++ name1：委托类中的方法名
++ name2：代理类中的方法名
+
+比如：
+
+```Java
+var1 = Class.forName("cglibProxy.Hello");
+var0 = Class.forName("cglibProxy.Hello$$EnhancerByCGLIB$$86032fed");
+MethodProxy.create(var1, var0, "()V", "sayHello", "CGLIB$sayHello$0");
+```
+
+创建完 `methodProxy` 后，我们通过 `invokeSuper` 来执行我们的方法
+
+```Java
+public Object invokeSuper(Object obj, Object[] args) throws Throwable {
+    try {
+        init();
+        FastClassInfo fci = fastClassInfo;
+        return fci.f2.invoke(fci.i2, obj, args);
+    } catch (InvocationTargetException e) {
+        throw e.getTargetException();
+    }
+}
+```
+
+首先看 `init` 方法
+
+```Java
+private void init()
+{
+    if (fastClassInfo == null)
+    {
+        synchronized (initLock)
+        {
+            if (fastClassInfo == null)
+            {
+                // create方法中生成的createInfo，保存委托类和代理类信息
+                CreateInfo ci = createInfo;
+
+                FastClassInfo fci = new FastClassInfo();
+                // 根据c1(委托类)生成对应的 FastClass
+                fci.f1 = helper(ci, ci.c1);
+                // 根据c2(代理类)生成对应的 FastClass
+                fci.f2 = helper(ci, ci.c2);
+                // 得到方法索引
+                fci.i1 = fci.f1.getIndex(sig1);
+                fci.i2 = fci.f2.getIndex(sig2);
+                fastClassInfo = fci;
+                createInfo = null;
+            }
+        }
+    }
+}
+
+// FastClassInfo结构
+private static class FastClassInfo
+{
+    FastClass f1;
+    FastClass f2;
+    int i1;
+    int i2;
+}
+```
+
+`init` 方法主要就是初始化一个 FastClassInfo，这个类其实包装了我们的委托类 f1 和代理类 f2，以及当前方法在 f1 中的索引值 i1 和在 f2 中的索引值 i2。
+
+所以我们在调用时，直接给 invoke 传入方法索引值即可。如 `invokeSuper` 中的调用 `fci.f2.invoke(fci.i2, obj, args)` ，然后看生成的 `HelloFastClass` 中的 `invoke`
+
+```Java
+public Object invoke(int var1, Object var2, Object[] var3) throws InvocationTargetException {
+    Hello var10000 = (Hello)var2;
+    int var10001 = var1;
+
+    try {
+        switch(var10001) {
+            case 0:
+                var10000.sayHello();
+                return null;
+            case 1:
+                var10000.sayBye();
+                return null;
+            case 2:
+                return new Boolean(var10000.equals(var3[0]));
+            case 3:
+                return var10000.toString();
+            case 4:
+                return new Integer(var10000.hashCode());
+        }
+    } catch (Throwable var4) {
+        throw new InvocationTargetException(var4);
+    }
+
+    throw new IllegalArgumentException("Cannot find matching method/constructor");
+}
+```
+
+其实就是通过索引值找到对应的方法直接调用
+
+
+
+### cglib 缺点
+
+因为这个方法需要继承委托类，如果委托类被修饰为 `final`，则无法代理，同样，如果方法被 `final` 修饰，同样无法代理。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## 相关问题
 
 #### 一、为什么代理类接口数不能超过 65535？
