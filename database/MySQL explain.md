@@ -220,3 +220,49 @@ SELECT * FROM s1 INNER JOIN s2 ON s1.id = s2.id
 
 假设索引为 varchar(10)，使用的字符集为 utf8，如果索引列不能为 NULL，则 key_len 为 10*3+2 = 32字节，可以为 NULL 则为 33 字节。
 
+#### 八、ref
+
+当使用**索引列等值匹配**的条件进行查询，ref 表示与索引列等值匹配的值，可能是常量、列、函数。
+
+如：
+
++ 常量： `explain select * from s1 where key1 = 'a'`，此时 `ref = const`
+
++ 列：`EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s1.id = s2.id`，假设此时 s2 为被驱动表，则在 s2 中的查询都要匹配 s1 的 id 列，此时 `ref = 数据库名.表名.列名` ，即 `ref = testdb.s1.id`
+
++ 函数：`EXPLAIN SELECT * FROM s1 INNER JOIN s2 ON s2.key1 = UPPER(s1.key1)`，此时 `ref = func`
+
+  
+
+#### 九、rows
+
+预计扫描的行数
+
+
+
+#### 十、filtered
+
+表示估计符合过滤条件的行数的百分比，100 最大，表示百分之百的数据都符合过滤条件。如果 rows 为 1000，filtered 为 50，则估计符合条件的数据为 1000 * 50% = 500。
+
+
+
+#### 十一、extra
+
+表示 SQL 语句执行计划的额外信息。以下是常用的额外信息
+
++ using filesort
+
+  无法利用索引完成排序，会在内存或者硬盘进行排序
+
++ using temporary
+
+  产生临时表保存中间结果，MySQL 借助临时表来完成一些功能，如去重、排序之类。常见于 `order by` 和 `group by`
+
++ using index
+
+  表示查询覆盖了索引，无需回表
+
++ using index condition
+
+  搜索条件出现索引列，可是没有用到索引。
+
