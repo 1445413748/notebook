@@ -74,7 +74,7 @@ Constant pool:
 
 JVM规范里Class文件的常量池项的类型，有两种东西：CONSTANT_Utf8、CONSTANT_String。后者是String常量的类型，但它并不直接持有String常量的内容，而是只持有一个index，这个index所指定的另一个常量池项必须是一个CONSTANT_Utf8类型的常量，这里才真正持有字符串的内容。
 
-在Hotspot VM 中，运行时常量池里，CONSTANT_Utf8 在类加载过程中就全部创建出来，相当于一个指针指向一个 Symbol 类型的 c++ 对象，内容是跟 class 文件中相同格式的 utf8 字符串。而 ==CONSTANT_String 是 lazy resolve 的==，在还没有 resolve 之前，JVM 将它的类型称为 JVM_CONSTANT_UnresolvedString，内容跟 class 文件常量池中一样只有一个 index。
+在Hotspot VM 中，运行时常量池里，CONSTANT_Utf8 在类加载过程中就全部创建出来，相当于一个指针指向一个 Symbol 类型的 c++ 对象，内容是跟 class 文件中相同格式的 utf8 字符串。而 **CONSTANT_String 是 lazy resolve 的**，在还没有 resolve 之前，JVM 将它的类型称为 JVM_CONSTANT_UnresolvedString，内容跟 class 文件常量池中一样只有一个 index。
 
 从上面可以得知，对 HotSpot VM 来说，加载类的时候，这些字符串字面量会进入当前类的运行时常量池，不会进入全局字符串常量池，即 StringTable 中没有相应的引用，在堆中也没有相应的对象产生。
 
@@ -121,7 +121,7 @@ ldc 指令将字符串 hello 从运行时常量池中推送到栈顶，然后 as
 
 ### 一些例子
 
-在这之前，先了解一下 `java.lang.String.intern()`方法。在 JDK7 及以上，对一个字符串调用 intern 方法，如果常量池中已经有了这个字符串则直接返回常量池中的引用，如果没有，则将该字符串的引用保存到字符串常量池并且返回该引用，注意这个引用都是指向堆中的对象。
+在这之前，先了解一下 `java.lang.String.intern()`方法。在 JDK7 及以上，对一个字符串调用 intern 方法，如果常量池中已经有了这个字符串（通过 equals 比较）则直接返回常量池中的引用，如果没有，则将该字符串的引用保存到字符串常量池并且返回该引用，注意这个引用都是指向堆中的对象。
 
 例子1：
 
@@ -150,7 +150,7 @@ new 是创建一个字符串对象实例，对其进行默认初始化，并将�
 
 接下来执行第二句，s1.intern() 会查找字符串常量池中是否有 hello 字符串的引用，因为在执行 ldc 的时候 JVM 已经将 hello 对象驻留在字符串常量池中，也就是字符串常量中已经有内容为 hello 的对象，所以直接返回该引用，而且并不会将 s1 的引用放入字符串常量池，所以结果为 false。
 
-[字节码更详细]([https://github.com/zpffly/notebook/blob/master/jvm/Java%E5%AD%97%E8%8A%82%E7%A0%81.md](https://github.com/zpffly/notebook/blob/master/jvm/Java字节码.md))
+[字节码更详细](https://github.com/zpffly/notebook/blob/master/jvm/Java字节码.md)
 
 例子2：
 
