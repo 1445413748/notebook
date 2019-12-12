@@ -129,3 +129,6 @@ auto-aof-rewrite-min-size 64mb
 
 当前 AOF 文件是上次 rewrite 后大小的一倍（100%）且文件大小大于64m。
 
+
+
+原理详细：https://juejin.im/post/5d24a1b4f265da1baf7d126e
