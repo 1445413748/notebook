@@ -131,4 +131,8 @@ auto-aof-rewrite-min-size 64mb
 
 
 
-原理详细：https://juejin.im/post/5d24a1b4f265da1baf7d126e
+原理详细：
+
+https://juejin.im/post/5d24a1b4f265da1baf7d126e
+
+https://juejin.im/post/5b70dfcf518825610f1f5c16#heading-4
