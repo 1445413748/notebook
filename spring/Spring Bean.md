@@ -339,6 +339,216 @@ public class MyBeanPostProcessor implements BeanPostProcessor {
 
 
 
+## Bean自动装配
+
+### 扫描注解
+
+为了使下面的使用的注解生效，应该先使用 `@ComponentScan` 指明扫描哪里的注解，可以通过包名指定，也可以通过类 .class 指定
+
+也可以在`xml`文件中配置，如下：
+
+```xml
+<context:component-scan base-package="com.example.demo"/>
+```
+
+### 使用注解 @Autowired
+
+`@Autowired` 默认是根据注入类的类型在 `ioc` 容器中寻找合适的 `bean`，如果该类型存在多个 `bean` ，则需要进行处理。
+
+因为 `@Autowired` 是由 `BeanPostProcessor` 处理的，所以不能在我们自己的 `BeanPostProcessor` 或 `BeanFactorPostProcessor` 类型应用（造成循环依赖），可以通过 `XML` 或者 `@Bean` 注解加载 
+
+Good 类：
+
+```java
+@Repository
+public class Good {
+    public void save(){
+        System.out.println("good save in dao");
+    }
+}
+```
+
+
+
+#### 一、使用在类属性上
+
+```java
+@Service
+public class GoodService {
+
+    @Autowired
+    private Good good;
+
+    public void save(){
+        System.out.println("save in service");
+        good.save();
+    }
+}
+```
+
+测试
+
+```java
+@Test
+void tes1() {
+    GoodService goodService = (GoodService)context.getBean("goodService");
+    goodService.save();
+}
+```
+
+输出
+
+```
+save in service
+good save in dao
+```
+
+
+
+#### 二、使用在方法上
+
+```java
+@Service
+public class GoodService {
+    
+    private Good good;
+    
+    @Autowired
+    public void setGood(Good good){
+        this.good = good;
+    }
+
+    public void save(){
+        System.out.println("save in service");
+        good.save();
+    }
+}
+```
+
+#### 三、使用在构造器上
+
+```java
+@Service
+public class GoodService {
+
+    private Good good;
+
+    @Autowired
+    public GoodService(Good good){
+        this.good = good;
+    }
+
+    public void save(){
+        System.out.println("save in service");
+        good.save();
+    }
+
+}
+```
+
+#### 四、使用在数组及Map
+
+当 `@AutoWired` 使用在数组上，会自动注入`ioc` 中所有数组指定类型的bean
+
+```java
+// 接口
+public interface BeanInterface {
+}
+
+// 实现接口的两个类
+@Component
+public class BeanImplOne implements BeanInterface {
+}
+
+@Component
+public class BeanImplTwo implements BeanInterface {
+}
+
+```
+
+BeanInvoker：
+
+```java
+@Component
+public class BeanInvoker {
+
+    @Autowired
+    List<BeanInterface> list;  //类型为BeanInterface，如果指定类型相当于找list类型的bean
+
+    public void printList(){
+        if (list != null){
+            for (BeanInterface bean : list)
+                System.out.println(bean.getClass().getName());
+        }else {
+            System.out.println("list is null");
+        }
+    }
+}
+```
+
+我们通过 `BeanInvoker` 打印 list
+
+```java
+@Test
+void test2(){
+    BeanInvoker invoker = (BeanInvoker) context.getBean("beanInvoker");
+    invoker.printList();
+}
+```
+
+结果
+
+```
+com.example.demo.bean.BeanImplOne
+com.example.demo.bean.BeanImplTwo
+```
+
+
+
+使用在 `Map` 注意 `key`的类型为 `String` ，对应为 `bean` 的 id，后面则是我们指定的类型
+
+```java
+@Component
+public class BeanInvoker {
+
+    @Autowired
+    Map<String, BeanInterface> map;
+
+    public void printMap(){
+        if (map != null){
+            for (Map.Entry<String, BeanInterface> entry : map.entrySet()){
+                System.out.println(entry.getKey() + "-->" + entry.getValue());
+            }
+        }else {
+            System.out.println("map is null");
+        }
+    }
+}
+```
+
+执行`printMap` 结果
+
+```
+beanImplOne-->com.example.demo.bean.BeanImplOne@5909ae90
+beanImplTwo-->com.example.demo.bean.BeanImplTwo@4489f60f
+```
+
+如果希望注入的`Bean` 是有序的，可以使用 `@Order` 注释在我们相应类型的类上即可
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## Reference
