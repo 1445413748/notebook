@@ -64,4 +64,128 @@ AMQP ：Advanced Message Queue，高级消息队列协议。它是应用层协�
 
 
 
- 
+##  基本使用
+
+#### 生产端：
+
+```java
+public class Producer {
+
+    public static void main(String[] args) throws Exception{
+
+        // 创建连接工厂
+        ConnectionFactory factory = new ConnectionFactory();
+        // 配置工厂
+        factory.setHost("127.0.0.1");
+        factory.setPort(5672);
+        factory.setVirtualHost("/");
+        // 通过获取连接
+        Connection connection = factory.newConnection();
+        // 通过连接获取通道
+        Channel channel = connection.createChannel();
+        // 通过 channel 发送数据
+        for (int i = 0; i < 5; i++) {
+            String msg = "msg" + i;
+            // 参数分别为 exchange, routingKey, properties, message
+            // exchange 为空则默认为default的exchange，它会绑定所有的消息队列，将消息路由到队列名与routingKey相等的队列
+            channel.basicPublish("", "test", null, msg.getBytes());
+        }
+        // 关闭资源
+        channel.close();
+        connection.close();
+    }
+}
+```
+
+#### 消费端：
+
+```java
+public class Consumer {
+
+    public static void main(String[] args) throws Exception{
+        // 创建连接工厂
+        ConnectionFactory factory = new ConnectionFactory();
+        // 配置工厂
+        factory.setHost("127.0.0.1");
+        factory.setPort(5672);
+        factory.setVirtualHost("/");
+        // 通过获取连接
+        Connection connection = factory.newConnection();
+        // 通过连接获取通道
+        Channel channel = connection.createChannel();
+        // 声明队列
+        String queueName = "test";
+        channel.queueDeclare(queueName,true, false, false, null);
+        // 创建消费者
+        DefaultConsumer consumer = new DefaultConsumer(channel){
+            // handle消息
+            @Override
+            public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body) throws IOException {
+                String msg = new String(body, StandardCharsets.UTF_8);
+                System.out.println("收到消息：" + msg);
+            }
+        };
+        // 设置channel,连接队列和消费者
+        channel.basicConsume(queueName, true, consumer);
+    }
+}
+
+```
+
+
+
+## Exchange交换机
+
+主要功能，接收消息，并根据路由建转发消息所绑定的队列。
+
+### 属性
+
++ name：交换机名称
+
++ Type：交换机类型 direct、topic、fanout、headers
+
++ Durability：是否需要持久化，true为持久化
+
++ Auto Delete：当最后一个绑定到 `Exchange` 上队列删除后，自动删除该 `Exchange`
+
++ Internal：当前 `Exchange` 是否用于 `RabbitMQ` 内部使用，一般为 `false`
+
++ Arguments：扩展参数，用于扩展 `AMQP` 协议自定化使用
+
+  
+
+### 交换机类型(type)
+
+
+
+#### Direct Exchange
+
+所有发送到 `Direct Exchange` 的消息被转发到 `RouteKey` 中指定的 `Queue`
+
+![](img/2018-02-05-15178362325041.jpg)
+
+
+
+#### Topic Exchange
+
+所有发送到 `topic exchange` 的消息被转发到所有匹配路由键通配符的队列。
+
+`Exchange` 将 `RouteKey` 和某 `Topic` 进行模糊匹配，此时队列需要绑定一个 `topic`
+
+![](img/2018-02-05-15178362981229.jpg)
+
+可以使用通配符进行模糊匹配
+
+| 符号 | 匹配规则                                  |
+| ---- | ----------------------------------------- |
+| #    | 匹配一个或多个单词                        |
+| *    | 只匹配一个词，* 操作符将 “.” 视为分割符。 |
+
+
+
+#### Fanout Exchange
+
+不需要路由键，会将消息转发给绑定该路由器的所有队列，Fanout 转发消息最快，因为不需要判断 `routeKey`
+
+![](img/2018-02-05-15178362764464.jpg)
+
