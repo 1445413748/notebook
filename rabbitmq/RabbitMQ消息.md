@@ -146,3 +146,49 @@ channel.basicQos(0, 2, false);
 channel.basicConsume(queueName, false, consumer);
 ```
 
+
+
+## TTL队列/消息
+
+TTL（Time to Live）指生存时间。
+
+RabbitMQ 支持消息的过期时间，在消息发送时可以指定，从消息入队开始计时，只要超过配置的时间，消息会自动清除。
+
+
+
+## 死信队列
+
+DLX， Dead-Letter-Exchnge，当消息在一个队列中变成死信（dead message）之后，它能被重新 `publish` 到另一个 `Exchange` ，这个 `Exchange` 就是 `DLX`。
+
+### 消息变成死信几种情况
+
+一、消息被拒绝
+
+二、消息 TTL 过期
+
+三、队列达到最大长度
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
