@@ -73,3 +73,76 @@
 如果数据库和缓存不是原子性的，可能存在以下问题，来了一条新消息，`redis` 发现缓存不存在，则进行缓存和写入数据库，可是这时写入数据库失败，也就是数据库没有这条消息。当再来同样的消息，`Redis` 会直接过滤，可是数据库并没有这条数据。
 
 二、如果不进行落库，如何设置同步策略。
+
+
+
+## Confirm 确认消息
+
+消息的确认，指生产者投递消息后，如果 `Broker` 收到消息，则会给生产者一个应答。生产者进行接收应答，用来确认这条消息是否正常发送到 `Broker` ，这种方式是消息可靠性投递的核心保障。
+
+### 如何实现Confirm确认消息？
+
+第一步，在 `channel` 开启确认模式：`channel.confirmSelect()`
+
+第二步，在 `channel` 添加监听：`addConfirmListener`，监听成功和失败的返回结果，根据具体结果进行后续操作。
+
+```java
+// producer set confirmListener
+channel.addConfirmListener(new ConfirmListener() {
+    @Override
+    public void handleAck(long deliveryTag, boolean multiple) throws IOException {
+        System.err.println("========== ack =============");
+    }
+
+    @Override
+    public void handleNack(long deliveryTag, boolean multiple) throws IOException {
+        System.out.println("=============no ack===============");
+    }
+});
+```
+
+
+
+
+
+## Return 消息机制
+
+`Return Listener` 用于处理不可路由的消息。在某些情况下，我们发送消息的 `Exchange` 不存在或者指定的`routeKey ` 路由不到，我们需要通过 `Return Listener` 监听这些不可达消息。
+
+  ![深度截图_选择区域_20191227191219](/home/zpffly/Data/mydata/notebook/rabbitmq/img/深度截图_选择区域_20191227191219.png)
+
+生产端发布消息一个重要参数：`Mandatory` ，如果为 `true` 则监听器会接收到路由不可达的消息，然后进行后续处理，如果为 `false` ，那么 `broker` 端会自动删除消息。
+
+​         
+
+## 消费端限流
+
+### 为什么进行限流
+
+假设我们 `RabbitMQ` 服务器存在大量未处理的消息，如果我们随便打开一个消费端，则此时巨量的消息会全部推送过来，消费端无法瞬间处理这么多消息，可能会出现崩溃。
+
+### 解决
+
+`RabbitMQ` 提供了一种 `qos`（服务质量保证）功能，即在**非自动确认消息的前提下**，如果一定数量的的消息（通过基于 `consumer` 或者 `channel` 设置 `Qos` 的值）为被确认前，不进行消费新的消息。
+
+主要APi：
+
+`void BasicQos(unit prefetchSize, ushort prefetchCount, bool global)`
+
++ prefetchSize：消息大小限制，一般不限制
+
++ prefetchCount：通知 `rabbitMQ` 最多不要同时给消费者推送多于 N 个消息，即一旦有 N 个消息没有 `ack`，则该 `consume` 将阻塞，直到有消息 `ack`
+
++ global：
+
+  true：将上面的设置应用在 `channel` 级别（channel 可以有多个消费者）
+
+  false：将上面的设置应用在 `consumer` 级别
+
+```java
+// 消费端设置Qos
+channel.basicQos(0, 2, false);
+// 注意自动消息回复要设置为false
+channel.basicConsume(queueName, false, consumer);
+```
+
